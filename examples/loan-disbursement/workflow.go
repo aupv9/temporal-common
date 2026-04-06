@@ -5,7 +5,15 @@ import (
 	"time"
 
 	temporalcommon "github.com/yourorg/temporal-common"
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
+)
+
+// Typed search attribute keys — defined once, reused across the workflow.
+var (
+	saLoanID     = temporal.NewSearchAttributeKeyString("LoanID")
+	saBorrowerID = temporal.NewSearchAttributeKeyString("BorrowerID")
+	saStage      = temporal.NewSearchAttributeKeyString("Stage")
 )
 
 const TaskQueue = "loan-disbursement"
@@ -40,11 +48,11 @@ func LoanDisbursementWorkflow(ctx workflow.Context, input LoanDisbursementInput)
 	changes.Define("add-kyc-score-check-2024-01", 1)
 
 	// --- Observability: tag workflow for search ---
-	_ = workflow.UpsertSearchAttributes(ctx, map[string]interface{}{
-		"LoanID":     input.LoanID,
-		"BorrowerID": input.BorrowerID,
-		"Stage":      "INIT",
-	})
+	_ = workflow.UpsertTypedSearchAttributes(ctx,
+		saLoanID.ValueSet(input.LoanID),
+		saBorrowerID.ValueSet(input.BorrowerID),
+		saStage.ValueSet("INIT"),
+	)
 
 	// --- Saga setup ---
 	saga := temporalcommon.NewSaga(ctx)
@@ -74,7 +82,7 @@ func LoanDisbursementWorkflow(ctx workflow.Context, input LoanDisbursementInput)
 
 	// Step 2: Human approval gate (for large loans)
 	if input.RequiresApproval || input.Amount > 100_000 {
-		_ = workflow.UpsertSearchAttributes(ctx, map[string]interface{}{"Stage": "AWAITING_APPROVAL"})
+		_ = workflow.UpsertTypedSearchAttributes(ctx, saStage.ValueSet("AWAITING_APPROVAL"))
 
 		approval, err := temporalcommon.WaitForApproval(ctx, temporalcommon.ApprovalRequest{
 			ApprovalID:  input.LoanID,
@@ -90,7 +98,7 @@ func LoanDisbursementWorkflow(ctx workflow.Context, input LoanDisbursementInput)
 		}
 	}
 
-	_ = workflow.UpsertSearchAttributes(ctx, map[string]interface{}{"Stage": "DISBURSING"})
+	_ = workflow.UpsertTypedSearchAttributes(ctx, saStage.ValueSet("DISBURSING"))
 
 	// Step 3: Reserve funds (financial API)
 	finCtx := temporalcommon.WithFinancialAPIOptions(ctx)
@@ -123,7 +131,7 @@ func LoanDisbursementWorkflow(ctx workflow.Context, input LoanDisbursementInput)
 		return LoanDisbursementResult{}, fmt.Errorf("disbursement failed: %w", err)
 	}
 
-	_ = workflow.UpsertSearchAttributes(ctx, map[string]interface{}{"Stage": "NOTIFYING"})
+	_ = workflow.UpsertTypedSearchAttributes(ctx, saStage.ValueSet("NOTIFYING"))
 
 	// Step 5: Notify borrower (best-effort, does NOT block saga completion).
 	notifyCtx := temporalcommon.WithNotificationOptions(ctx)
@@ -136,7 +144,7 @@ func LoanDisbursementWorkflow(ctx workflow.Context, input LoanDisbursementInput)
 	// Mark saga complete — prevents defer Compensate from rolling back.
 	saga.Complete()
 
-	_ = workflow.UpsertSearchAttributes(ctx, map[string]interface{}{"Stage": "COMPLETED"})
+	_ = workflow.UpsertTypedSearchAttributes(ctx, saStage.ValueSet("COMPLETED"))
 
 	return LoanDisbursementResult{
 		TransactionID: disbursement.TransactionID,

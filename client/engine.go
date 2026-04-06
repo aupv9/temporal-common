@@ -26,6 +26,7 @@ type Engine struct {
 	tracingShutdown func(context.Context) error
 	logger          *zap.Logger
 	metricsRegistry *prometheus.Registry // non-nil when Metrics.Enabled = true
+	slaEntries      []slaEntry            // registered SLA configs, populated by RegisterWorkflowWithSLA
 }
 
 // New creates an Engine from the given Config, wiring in observability
@@ -134,6 +135,18 @@ func (e *Engine) Client() client.Client {
 // TaskQueue returns the task queue this Engine's worker is bound to.
 func (e *Engine) TaskQueue() string {
 	return e.config.TaskQueue
+}
+
+// StartOrAttach starts a workflow using the Engine's client and task queue,
+// or returns a handle to the already-running execution if one exists for workflowID.
+// See client.StartOrAttach for full semantics.
+func (e *Engine) StartOrAttach(
+	ctx context.Context,
+	workflowID string,
+	workflowFn interface{},
+	args ...interface{},
+) (WorkflowHandle, error) {
+	return StartOrAttach(ctx, e.client, workflowID, e.config.TaskQueue, workflowFn, args...)
 }
 
 // ServeMetrics starts an HTTP server exposing Prometheus metrics at /metrics

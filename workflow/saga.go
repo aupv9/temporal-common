@@ -23,7 +23,9 @@ type compensation struct {
 //
 // Usage pattern — in every workflow:
 //
-//	saga := workflow.NewSaga(ctx)
+//	saga := temporalcommon.NewSaga(ctx,
+//	    temporalcommon.WithDLQHandler(temporalcommon.NewActivityDLQHandler(MyDLQSinkActivity)),
+//	)
 //	defer saga.Compensate() // automatically rolls back if not completed
 //
 //	result, err := executeStep(ctx)
@@ -36,22 +38,30 @@ type compensation struct {
 type Saga struct {
 	ctx           workflow.Context
 	id            string
+	runID         string
 	compensations []compensation
 	pivotIdx      int  // -1 means no pivot set
 	completed     bool // set by Complete(); guards defer Compensate()
 	logger        log.Logger
+	dlqHandler    CompensationDLQHandler // optional; nil = log-only (existing behaviour)
 }
 
 // NewSaga initialises a Saga bound to the given workflow context.
 // Call defer saga.Compensate() immediately after.
-func NewSaga(ctx workflow.Context) *Saga {
+// Pass SagaOption values to configure DLQ handling and other behaviour.
+func NewSaga(ctx workflow.Context, opts ...SagaOption) *Saga {
 	info := workflow.GetInfo(ctx)
-	return &Saga{
+	s := &Saga{
 		ctx:      ctx,
 		id:       info.WorkflowExecution.ID,
+		runID:    info.WorkflowExecution.RunID,
 		pivotIdx: -1,
 		logger:   workflow.GetLogger(ctx),
 	}
+	for _, o := range opts {
+		o(s)
+	}
+	return s
 }
 
 // AddCompensation registers a rollback step.
@@ -124,6 +134,30 @@ func (s *Saga) Compensate() {
 				"step", c.stepName,
 				"error", compErr,
 			)
+
+			// Route to DLQ handler if configured.
+			if s.dlqHandler != nil {
+				event := CompensationFailureEvent{
+					SagaID:       s.id,
+					RunID:        s.runID,
+					StepName:     c.stepName,
+					StepIndex:    i,
+					ErrorMessage: err.Error(),
+					OccurredAt:   workflow.Now(s.ctx),
+				}
+				func() {
+					defer func() {
+						if r := recover(); r != nil {
+							s.logger.Error("saga: DLQ handler panicked",
+								"sagaID", s.id,
+								"step", c.stepName,
+								"panic", r,
+							)
+						}
+					}()
+					s.dlqHandler.OnCompensationFailed(s.ctx, event)
+				}()
+			}
 			// Do NOT return — continue compensating remaining steps.
 		}
 	}

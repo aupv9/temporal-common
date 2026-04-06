@@ -133,8 +133,50 @@ var IdempotencyKeyNoRetry = activity.IdempotencyKeyNoRetry
 type Saga = wf.Saga
 
 // NewSaga initialises a Saga. Call defer saga.Compensate() immediately after.
-func NewSaga(ctx workflow.Context) *wf.Saga {
-	return wf.NewSaga(ctx)
+// Pass SagaOption values to configure DLQ handling and other behaviour.
+func NewSaga(ctx workflow.Context, opts ...wf.SagaOption) *wf.Saga {
+	return wf.NewSaga(ctx, opts...)
+}
+
+// SagaOption is a functional option for NewSaga.
+type SagaOption = wf.SagaOption
+
+// CompensationDLQHandler is notified when a saga compensation step fails permanently.
+type CompensationDLQHandler = wf.CompensationDLQHandler
+
+// CompensationFailureEvent carries details of a permanently-failed compensation step.
+type CompensationFailureEvent = wf.CompensationFailureEvent
+
+// WithDLQHandler attaches a DLQ handler to a Saga.
+// When a compensation step fails permanently the handler is called before
+// continuing to the next step.
+var WithDLQHandler = wf.WithDLQHandler
+
+// NewActivityDLQHandler creates a DLQ handler that durably routes failure
+// events to a Temporal activity (database, PagerDuty, Jira, etc.).
+var NewActivityDLQHandler = wf.NewActivityDLQHandler
+
+// NewActivityDLQHandlerWithOptions is like NewActivityDLQHandler with a
+// custom activity options function.
+var NewActivityDLQHandlerWithOptions = wf.NewActivityDLQHandlerWithOptions
+
+// ---------------------------------------------------------------------------
+// Workflow state / query handler
+// ---------------------------------------------------------------------------
+
+// QueryCurrentState is the Temporal query type for fetching WorkflowStateSnapshot.
+const QueryCurrentState = wf.QueryCurrentState
+
+// WorkflowStateSnapshot is the serialisable snapshot returned by QueryCurrentState.
+type WorkflowStateSnapshot = wf.WorkflowStateSnapshot
+
+// WorkflowState provides a standard query interface for any workflow.
+// Register at the top of every workflow with NewWorkflowState(ctx).
+type WorkflowState = wf.WorkflowState
+
+// NewWorkflowState registers the QueryCurrentState handler and returns a tracker.
+func NewWorkflowState(ctx workflow.Context) *wf.WorkflowState {
+	return wf.NewWorkflowState(ctx)
 }
 
 // ---------------------------------------------------------------------------
@@ -193,6 +235,31 @@ var CreateSchedule = wf.CreateSchedule
 var DeleteSchedule = wf.DeleteSchedule
 
 // ---------------------------------------------------------------------------
+// Idempotent workflow start
+// ---------------------------------------------------------------------------
+
+// WorkflowHandle is a lightweight reference to a running or completed workflow execution.
+type WorkflowHandle = client.WorkflowHandle
+
+// StartOrAttach starts a workflow, or returns a handle to the already-running
+// execution if one exists for the same workflowID. Prevents double-execution
+// from API retries or at-least-once message delivery.
+var StartOrAttach = client.StartOrAttach
+
+// StartOrAttachWithOptions is like StartOrAttach with full StartWorkflowOptions.
+var StartOrAttachWithOptions = client.StartOrAttachWithOptions
+
+// ---------------------------------------------------------------------------
+// SLA monitoring
+// ---------------------------------------------------------------------------
+
+// SLAConfig configures SLA monitoring for a workflow type.
+type SLAConfig = client.SLAConfig
+
+// SLABreachEvent is delivered to SLAConfig.AlertFn on threshold breach.
+type SLABreachEvent = client.SLABreachEvent
+
+// ---------------------------------------------------------------------------
 // Parallel execution
 // ---------------------------------------------------------------------------
 
@@ -222,3 +289,81 @@ func ExecuteParallelBestEffort(ctx workflow.Context, calls []wf.ActivityCall) []
 // NewOptionsBuilder creates a fluent builder for workflow.ActivityOptions.
 // Use when the four built-in presets don't fit your use case.
 var NewOptionsBuilder = activity.NewOptionsBuilder
+
+// ---------------------------------------------------------------------------
+// Activity panic recovery
+// ---------------------------------------------------------------------------
+
+// WithPanicRecovery wraps an activity function so panics are caught and
+// converted to RetryableErrors with the full stack trace.
+// Wrap at registration time: engine.RegisterActivity(temporalcommon.WithPanicRecovery(MyActivity))
+var WithPanicRecovery = activity.WithPanicRecovery
+
+// ---------------------------------------------------------------------------
+// Structured audit trail
+// ---------------------------------------------------------------------------
+
+// AuditEventKind classifies audit log entries.
+type AuditEventKind = wf.AuditEventKind
+
+const (
+	// AuditKindStep records a completed workflow step.
+	AuditKindStep = wf.AuditKindStep
+	// AuditKindApproval records a human approval decision.
+	AuditKindApproval = wf.AuditKindApproval
+	// AuditKindCompensation records a saga compensation action.
+	AuditKindCompensation = wf.AuditKindCompensation
+	// AuditKindStageChange records a workflow stage transition.
+	AuditKindStageChange = wf.AuditKindStageChange
+	// AuditKindCustom is a catch-all for application-defined events.
+	AuditKindCustom = wf.AuditKindCustom
+)
+
+// AuditEntry is a single immutable audit record produced inside a workflow.
+type AuditEntry = wf.AuditEntry
+
+// AuditWriter is implemented by anything that can persist audit entries.
+// In production, use NewActivityAuditWriter. In tests, use NoOpAuditWriter.
+type AuditWriter = wf.AuditWriter
+
+// NoOpAuditWriter discards all audit entries. Use in unit tests.
+type NoOpAuditWriter = wf.NoOpAuditWriter
+
+// WithAuditTrail attaches an AuditWriter to the workflow context.
+// Call once at the top of every workflow.
+func WithAuditTrail(ctx workflow.Context, writer wf.AuditWriter) workflow.Context {
+	return wf.WithAuditTrail(ctx, writer)
+}
+
+// NewActivityAuditWriter creates an AuditWriter that durably persists entries
+// by scheduling activityFn (must accept context.Context and AuditEntry, return error).
+var NewActivityAuditWriter = wf.NewActivityAuditWriter
+
+// NewActivityAuditWriterWithOptions is like NewActivityAuditWriter with a
+// custom activity options function.
+var NewActivityAuditWriterWithOptions = wf.NewActivityAuditWriterWithOptions
+
+// AuditStep records a completed workflow step.
+func AuditStep(ctx workflow.Context, step, outcome string, details map[string]string) {
+	wf.AuditStep(ctx, step, outcome, details)
+}
+
+// AuditApproval records a human approval decision.
+func AuditApproval(ctx workflow.Context, step string, approved bool) {
+	wf.AuditApproval(ctx, step, approved)
+}
+
+// AuditCompensation records a saga compensation action.
+func AuditCompensation(ctx workflow.Context, step, outcome string, details map[string]string) {
+	wf.AuditCompensation(ctx, step, outcome, details)
+}
+
+// AuditStageChange records a workflow stage transition.
+func AuditStageChange(ctx workflow.Context, from, to string) {
+	wf.AuditStageChange(ctx, from, to)
+}
+
+// AuditCustom records an arbitrary application event.
+func AuditCustom(ctx workflow.Context, step, outcome string, details map[string]string) {
+	wf.AuditCustom(ctx, step, outcome, details)
+}

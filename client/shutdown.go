@@ -30,6 +30,9 @@ func (e *Engine) Start(ctx context.Context) error {
 		zap.String("hostPort", e.config.HostPort),
 	)
 
+	// Launch SLA monitors for any workflows registered with RegisterWorkflowWithSLA.
+	e.startSLAMonitors(ctx)
+
 	// Listen for context cancellation or OS signals.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)

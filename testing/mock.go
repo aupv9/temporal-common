@@ -82,6 +82,19 @@ func (mc *MockCall) Maybe() *MockCall {
 	return mc
 }
 
+// RunFn sets a function to be called when the mocked activity is invoked.
+// The fn signature must match the activity function signature exactly.
+// Use this to capture arguments passed to the activity in a test:
+//
+//	env.MockActivity(MyDLQSinkActivity).RunFn(func(_ context.Context, evt CompensationFailureEvent) error {
+//	    captured = evt
+//	    return nil
+//	})
+func (mc *MockCall) RunFn(fn interface{}) *MockCall {
+	mc.invoke("Return", fn)
+	return mc
+}
+
 // invoke calls a method by name on the underlying MockCallWrapper via reflection.
 // Handles variadic methods (e.g. Return(...interface{})) and non-variadic methods
 // (e.g. Once(), Times(n), Maybe()) correctly.
